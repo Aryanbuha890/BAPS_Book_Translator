@@ -1,0 +1,40 @@
+# Python Virtual Environment
+venv/
+.venv/
+env/
+
+# Model Weight Cache (extremely large - ~1.3 GB)
+models/
+
+# Database Caches and Progress Files
+db/
+*.db
+*.db-journal
+
+# Temporary Upload Folders
+temp/
+
+# Compiled Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Translation Outputs
+output/
+*_translated.*
+
+# Local Debug Scripts
+diagnose*.py
+test_translator.py
+check_*.py
+debug_*.py
+inspect_*.py
+
+# Editor settings and IDE metadata
+.vscode/
+.idea/
+.project
+.pydevproject
+.settings/
+.DS_Store

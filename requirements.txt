@@ -1,0 +1,15 @@
+torch
+transformers>=4.45.0,<4.48.0
+sentencepiece
+protobuf
+sacremoses
+indic-transliteration
+# indictranstoolkit (Commented out: using local pure-Python fallback to bypass compiler setup)
+PyMuPDF
+ebooklib
+beautifulsoup4
+streamlit
+reportlab
+google-generativeai
+anthropic
+tqdm
