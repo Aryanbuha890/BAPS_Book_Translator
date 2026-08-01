@@ -1,0 +1,17 @@
+# Core translation stack
+torch --extra-index-url https://download.pytorch.org/whl/cpu
+transformers>=4.38.0
+sentencepiece
+sacremoses
+IndicTransToolkit
+
+# Document handling
+PyMuPDF
+ebooklib
+beautifulsoup4
+python-docx
+reportlab
+
+# UI + utilities
+streamlit
+tqdm

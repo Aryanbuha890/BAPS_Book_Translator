@@ -5,18 +5,53 @@ import torch
 from tqdm import tqdm
 from progress import ProgressDB
 
-# Lazy loading variables for local model to save start-up overhead
-_local_tokenizer = None
-_local_model = None
+# Lazy loading dictionaries to hold both English-Indic and Indic-Indic checkpoints
+_local_tokenizers = {}
+_local_models = {}
 _local_processor = None
 _local_device = None
 
-def _load_local_model(hf_token: str = None):
+# Load BAPS Translation Memory (Translation Memory / Verified Sentences)
+TM_PATH = "translation_memory.json"
+_translation_memory = {}
+if os.path.exists(TM_PATH):
+    try:
+        with open(TM_PATH, "r", encoding="utf-8") as f:
+            raw_tm = json.load(f)
+            # Normalize keys to standard spacing for robust matches
+            for k, v in raw_tm.items():
+                normalized_k = re.sub(r'\s+', ' ', k.strip())
+                _translation_memory[normalized_k] = v
+    except Exception as e:
+        print(f"Warning: Failed to load translation memory: {e}")
+
+def check_translation_memory(text: str) -> str:
     """
-    Initializes and caches IndicTrans2 model and tokenizers on CPU.
+    Checks if the normalized text exists in the translation memory.
+    If yes, returns the verified translation. Else, returns None.
     """
-    global _local_tokenizer, _local_model, _local_processor, _local_device
-    if _local_model is not None:
+    normalized = re.sub(r'\s+', ' ', text.strip())
+    # Try exact match
+    if normalized in _translation_memory:
+        return _translation_memory[normalized]
+        
+    # Try without trailing dots/punctuation
+    normalized_no_punc = re.sub(r'[.!?।॥]\s*$', '', normalized).strip()
+    for src, tgt in _translation_memory.items():
+        src_no_punc = re.sub(r'[.!?।॥]\s*$', '', src).strip()
+        if normalized_no_punc == src_no_punc:
+            return tgt
+            
+    return None
+
+def _load_local_model(model_name: str, hf_token: str = None):
+    """
+    Initializes and caches IndicTrans2 model and tokenizers on CPU dynamically.
+    Loads on-demand depending on target checkpoint (indic-indic or en-indic).
+    """
+    global _local_tokenizers, _local_models, _local_processor, _local_device
+    
+    if model_name in _local_models:
         return
         
     from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
@@ -30,55 +65,117 @@ def _load_local_model(hf_token: str = None):
             "sidebar to either 'Cloud (Gemini)' or 'Cloud (Claude)'. They do not require any local compiler or model downloads."
         )
 
-    model_name = "ai4bharat/indictrans2-indic-indic-dist-320M"
-    _local_device = torch.device("cpu")
-    
+    if _local_device is None:
+        _local_device = torch.device("cpu")
+        
+    if _local_processor is None:
+        _local_processor = IndicProcessor(inference_stage="model")
+        
     kwargs = {"trust_remote_code": True, "cache_dir": "models"}
     if hf_token and hf_token.strip():
         kwargs["token"] = hf_token.strip()
     
+    print(f"Loading local checkpoint '{model_name}' on CPU...")
     try:
-        _local_tokenizer = AutoTokenizer.from_pretrained(model_name, **kwargs)
-        _local_model = AutoModelForSeq2SeqLM.from_pretrained(model_name, **kwargs).to(_local_device)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, **kwargs)
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_name, **kwargs).to(_local_device)
+        
+        # Cache model and tokenizer
+        _local_tokenizers[model_name] = tokenizer
+        _local_models[model_name] = model
+        print(f"✓ Loaded '{model_name}' successfully.")
     except Exception as first_error:
         # Fallback to local files only in case of connection or token authentication issues
         kwargs["local_files_only"] = True
         if "token" in kwargs:
             del kwargs["token"]
         try:
-            _local_tokenizer = AutoTokenizer.from_pretrained(model_name, **kwargs)
-            _local_model = AutoModelForSeq2SeqLM.from_pretrained(model_name, **kwargs).to(_local_device)
+            tokenizer = AutoTokenizer.from_pretrained(model_name, **kwargs)
+            model = AutoModelForSeq2SeqLM.from_pretrained(model_name, **kwargs).to(_local_device)
+            
+            _local_tokenizers[model_name] = tokenizer
+            _local_models[model_name] = model
+            print(f"✓ Loaded '{model_name}' from offline local files.")
         except Exception as fallback_error:
             raise OSError(
-                f"Failed to load the model. Ensure you have entered a valid token or that "
-                f"the model was downloaded successfully.\n\n"
+                f"Failed to load local model '{model_name}'. Please ensure you have downloaded "
+                f"the weights using 'download_model.py' first.\n\n"
                 f"Details:\nFirst attempt error: {first_error}\nOffline fallback error: {fallback_error}"
             )
-            
-    _local_processor = IndicProcessor(inference_stage="model")
+
+def clean_translated_text(text: str) -> str:
+    """
+    Cleans up common translation artifacts like duplicate repeating symbols (=, -) 
+    introduced by tokenizer limits or model glitches, and corrects spelling variations of spiritual terms.
+    """
+    # Remove repeating equals signs, spaces, or dashes
+    text = re.sub(r'={2,}', '', text)
+    text = re.sub(r'-{3,}', '', text)
+    text = re.sub(r'\s{2,}', ' ', text)
+    
+    # BAPS spiritual spelling corrections
+    corrections = {
+        "ভক্সনামৃতমে": "বচনামৃতে",
+        "ভক্সনামৃত": "বচনামৃত",
+        "বাক্যামৃত্রের": "বচনামৃতের",
+        "বাক্যামৃত": "বচনামৃত",
+        "শ্রীজি মহারাজ": "শ্রীজী মহারাজ",
+        "নিশ্চলানন্দ স্বামী": "নিষ্কুলানন্দ স্বামী",
+        "স্বয়ান্ হরি": "স্বয়ং হরি",
+        "স্বয় হরি": "স্বয়ং হরি",
+        "স্বয়হান হরি": "স্বয়ং হরি",
+        "সতপুরুষ": "সৎপুরুষ",
+        "মহান্ত স্বামী": "মহন্ত স্বামী",
+        "তীতর": "তীর্থ",
+        "মায়েশ": "মহন্ত"
+    }
+    
+    for typo, correct in corrections.items():
+        text = text.replace(typo, correct)
+        
+    return text.strip()
 
 def translate_chunks_local(
     chunks: list[str], 
     src_lang: str = "guj_Gujr", 
     tgt_lang: str = "ben_Beng", 
-    batch_size: int = 8, 
+    batch_size: int = 4, 
     hf_token: str = None
 ) -> list[str]:
     """
-    Translates a list of text chunks using local IndicTrans2.
+    Translates a list of text chunks using local IndicTrans2 1B models.
+    Selects the correct 1B model (indic-indic or en-indic) dynamically.
     """
-    _load_local_model(hf_token=hf_token)
+    if src_lang == "eng_Latn":
+        model_name = "ai4bharat/indictrans2-en-indic-1B"
+    else:
+        model_name = "ai4bharat/indictrans2-indic-indic-1B"
+        
+    _load_local_model(model_name, hf_token=hf_token)
+    tokenizer = _local_tokenizers[model_name]
+    model = _local_models[model_name]
+    
     results = []
     
     # Process in batches
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]
         
-        # Check for empty chunks (paragraph break markers)
-        non_empty_indices = [idx for idx, text in enumerate(batch) if text.strip()]
-        non_empty_texts = [batch[idx] for idx in non_empty_indices]
-        
+        # Check for translation memory hits and empty chunks
+        non_empty_indices = []
+        non_empty_texts = []
         batch_results = [""] * len(batch)
+        
+        for idx, text in enumerate(batch):
+            if not text.strip():
+                continue
+            mem_match = check_translation_memory(text)
+            if mem_match:
+                batch_results[idx] = mem_match
+            else:
+                non_empty_indices.append(idx)
+                non_empty_texts.append(text)
+                
         if not non_empty_texts:
             results.extend(batch_results)
             continue
@@ -87,7 +184,7 @@ def translate_chunks_local(
         preprocessed = _local_processor.preprocess_batch(non_empty_texts, src_lang=src_lang, tgt_lang=tgt_lang)
         
         # Tokenize and run model
-        inputs = _local_tokenizer(
+        inputs = tokenizer(
             preprocessed, 
             padding=True, 
             truncation=True, 
@@ -96,11 +193,20 @@ def translate_chunks_local(
         ).to(_local_device)
         
         with torch.no_grad():
-            outputs = _local_model.generate(**inputs, num_beams=5, max_length=256)
+            # Add repetition_penalty to avoid repeating character loops (like = = = = or word loops)
+            outputs = model.generate(
+                **inputs, 
+                num_beams=5, 
+                max_length=256,
+                repetition_penalty=1.2
+            )
             
-        with _local_tokenizer.as_target_tokenizer():
-            decoded = _local_tokenizer.batch_decode(outputs, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+        with tokenizer.as_target_tokenizer():
+            decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True, clean_up_tokenization_spaces=True)
         postprocessed = _local_processor.postprocess_batch(decoded, lang=tgt_lang)
+        
+        # Clean postprocessed text
+        postprocessed = [clean_translated_text(t) for t in postprocessed]
         
         for local_idx, orig_idx in enumerate(non_empty_indices):
             batch_results[orig_idx] = postprocessed[local_idx]
@@ -128,10 +234,20 @@ def translate_chunks_gemini(
     src_name = lang_names.get(src_lang, "Gujarati")
     tgt_name = lang_names.get(tgt_lang, "Bengali")
     
-    # Filter empty items
-    non_empty = [(idx, val) for idx, val in enumerate(chunks) if val.strip()]
+    # 1. Resolve Translation Memory hits first
+    final = [None] * len(chunks)
+    for idx, val in enumerate(chunks):
+        if not val.strip():
+            final[idx] = ""
+            continue
+        mem_match = check_translation_memory(val)
+        if mem_match:
+            final[idx] = mem_match
+            
+    # Find remaining items
+    non_empty = [(idx, chunks[idx]) for idx in range(len(chunks)) if final[idx] is None]
     if not non_empty:
-        return [""] * len(chunks)
+        return final
         
     indices, texts = zip(*non_empty)
     glossary_str = json.dumps(glossary, ensure_ascii=False) if glossary else "{}"
@@ -152,22 +268,23 @@ def translate_chunks_gemini(
         )
         translated = json.loads(response.text)
         if isinstance(translated, list) and len(translated) == len(texts):
-            final = [""] * len(chunks)
             for idx, text in zip(indices, translated):
                 final[idx] = text.strip()
             return final
+        else:
+            print("Gemini batch response length mismatch or incorrect format. Falling back to single translations.")
     except Exception as e:
-        # Fallback to single-chunk translations if batch fails
+        print(f"Gemini batch translation error: {e}. Falling back to single translations.")
         pass
 
-    # Fallback execution
-    final = [""] * len(chunks)
+    # Fallback execution for remaining items
     for idx, text in non_empty:
         p = f"Translate the following {src_name} text to {tgt_name}. Output ONLY the translation:\n\n{text}"
         try:
             r = model.generate_content(p)
             final[idx] = r.text.strip()
-        except:
+        except Exception as e:
+            print(f"Gemini single translation error for '{text}': {e}")
             final[idx] = "[Translation Error]"
     return final
 
@@ -189,9 +306,20 @@ def translate_chunks_claude(
     src_name = lang_names.get(src_lang, "Gujarati")
     tgt_name = lang_names.get(tgt_lang, "Bengali")
     
-    non_empty = [(idx, val) for idx, val in enumerate(chunks) if val.strip()]
+    # 1. Resolve Translation Memory hits first
+    final = [None] * len(chunks)
+    for idx, val in enumerate(chunks):
+        if not val.strip():
+            final[idx] = ""
+            continue
+        mem_match = check_translation_memory(val)
+        if mem_match:
+            final[idx] = mem_match
+            
+    # Find remaining items
+    non_empty = [(idx, chunks[idx]) for idx in range(len(chunks)) if final[idx] is None]
     if not non_empty:
-        return [""] * len(chunks)
+        return final
         
     indices, texts = zip(*non_empty)
     glossary_str = json.dumps(glossary, ensure_ascii=False) if glossary else "{}"
@@ -215,7 +343,6 @@ def translate_chunks_claude(
             text_out = re.sub(r"^```(json)?\n|```$", "", text_out, flags=re.MULTILINE)
         translated = json.loads(text_out)
         if isinstance(translated, list) and len(translated) == len(texts):
-            final = [""] * len(chunks)
             for idx, text in zip(indices, translated):
                 final[idx] = text.strip()
             return final
@@ -223,7 +350,6 @@ def translate_chunks_claude(
         pass
 
     # Fallback execution
-    final = [""] * len(chunks)
     for idx, text in non_empty:
         try:
             r = client.messages.create(

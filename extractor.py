@@ -1,4 +1,5 @@
 import os
+import re
 import fitz  # PyMuPDF
 import ebooklib
 from ebooklib import epub
@@ -9,10 +10,37 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-def extract_text_from_file(file_path: str) -> list[tuple[str, str]]:
+def detect_language(text: str) -> str:
     """
-    Auto-detects file extension and extracts content.
-    Returns a list of tuples: [(chapter_title, chapter_text), ...]
+    Detects language based on character count in Unicode ranges.
+    Returns: 'guj_Gujr' (Gujarati), 'hin_Deva' (Hindi), or 'eng_Latn' (English/Default)
+    """
+    # Sample first 10,000 characters to keep it fast
+    sample = text[:10000]
+    
+    guj_count = len(re.findall(r'[\u0a80-\u0aff]', sample))
+    hin_count = len(re.findall(r'[\u0900-\u097f]', sample))
+    eng_count = len(re.findall(r'[a-zA-Z]', sample))
+    
+    counts = {
+        "guj_Gujr": guj_count,
+        "hin_Deva": hin_count,
+        "eng_Latn": eng_count
+    }
+    
+    max_lang = max(counts, key=counts.get)
+    if counts[max_lang] == 0:
+        return "eng_Latn"
+    return max_lang
+
+def extract_text_from_file(file_path: str) -> tuple[list[tuple[str, str]], str]:
+    """
+    Auto-detects file extension, extracts content page-by-page or chapter-by-chapter,
+    and automatically detects the source document language.
+    
+    Returns a tuple: (list_of_chapters, detected_lang_tag)
+    Chapters is a list of tuples: [(chapter_title, chapter_text), ...]
+    detected_lang_tag is one of: 'guj_Gujr', 'hin_Deva', 'eng_Latn'
     """
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -20,26 +48,68 @@ def extract_text_from_file(file_path: str) -> list[tuple[str, str]]:
     ext = os.path.splitext(file_path)[1].lower()
 
     if ext == '.pdf':
-        return _extract_pdf(file_path)
+        chapters = _extract_pdf(file_path)
     elif ext == '.epub':
-        return _extract_epub(file_path)
+        chapters = _extract_epub(file_path)
     elif ext == '.txt':
-        return _extract_txt(file_path)
+        chapters = _extract_txt(file_path)
     else:
         raise ValueError(f"Unsupported file format: {ext}. Only PDF, EPUB, and TXT are supported.")
+        
+    # Concatenate sample text to detect document language
+    sample_text = " ".join([ch_text for _, ch_text in chapters[:3]])
+    detected_lang = detect_language(sample_text)
+    
+    return chapters, detected_lang
 
 def _extract_pdf(file_path: str) -> list[tuple[str, str]]:
     """
-    Extracts text from PDF page by page.
-    Treats each page as a chapter block.
+    Extract PDF text page by page. Each page becomes one "chapter" unit
+    for simplicity; headings within a page are detected by relative font
+    size and prefixed on their own line so assembler.py can style them.
     """
-    chapters = []
     doc = fitz.open(file_path)
+    chapters = []
+
     for page_num in range(len(doc)):
-        page = doc.load_page(page_num)
-        text = page.get_text("text")
-        if text.strip():
-            chapters.append((f"Page {page_num + 1}", text))
+        page = doc[page_num]
+        try:
+            blocks = page.get_text("dict")["blocks"]
+        except Exception:
+            blocks = []
+            
+        page_lines = []
+        sizes = []
+        for b in blocks:
+            for l in b.get("lines", []):
+                for span in l.get("spans", []):
+                    sizes.append(span["size"])
+                    
+        body_size = max(set(sizes), key=sizes.count) if sizes else 10
+
+        for block in blocks:
+            # Only process text blocks, ignore image blocks (type 1)
+            if block.get("type", 0) != 0:
+                continue
+                
+            for line in block.get("lines", []):
+                spans = line.get("spans", [])
+                if not spans:
+                    continue
+                text = "".join(s["text"] for s in spans).strip()
+                if not text:
+                    continue
+                avg_size = sum(s["size"] for s in spans) / len(spans)
+                if avg_size > body_size * 1.15:
+                    page_lines.append(f"## {text}")  # heading marker
+                else:
+                    page_lines.append(text)
+            page_lines.append("")  # paragraph break after each block
+
+        chapter_text = "\n".join(page_lines).strip("\n")
+        if chapter_text:
+            chapters.append((f"Page {page_num + 1}", chapter_text))
+
     doc.close()
     return chapters
 

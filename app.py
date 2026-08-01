@@ -11,8 +11,10 @@ from translator import (
     translate_chunks_local,
     translate_chunks_gemini,
     translate_chunks_claude,
-    apply_glossary
+    clean_translated_text,
+    check_translation_memory
 )
+from glossary import swap_in, swap_out, load_glossary
 from assembler import assemble_output
 
 # Set page config for premium look
@@ -130,6 +132,10 @@ if "last_batch_time" not in st.session_state:
     st.session_state.last_batch_time = []
 if "glossary_cache" not in st.session_state:
     st.session_state.glossary_cache = {}
+if "detected_lang" not in st.session_state:
+    st.session_state.detected_lang = None
+if "detected_lang_label" not in st.session_state:
+    st.session_state.detected_lang_label = None
 
 # Ensure workspace folders exist
 os.makedirs("temp", exist_ok=True)
@@ -145,16 +151,27 @@ with st.sidebar:
     # Source Language configuration
     src_lang_name = st.selectbox(
         "Source Language",
-        ["Gujarati", "Hindi", "English"],
-        help="Select the language of your input document."
+        ["Auto-detect", "Gujarati", "Hindi", "English"],
+        help="Select the language of your input document. 'Auto-detect' scans the document script directly."
     )
+    
     src_lang_map = {
         "Gujarati": "guj_Gujr",
         "Hindi": "hin_Deva",
         "English": "eng_Latn"
     }
-    src_lang = src_lang_map[src_lang_name]
     
+    # Resolve source language
+    if src_lang_name == "Auto-detect":
+        if st.session_state.detected_lang:
+            src_lang = st.session_state.detected_lang
+            st.caption(f"✓ Detected Script: **{st.session_state.detected_lang_label}**")
+        else:
+            src_lang = "guj_Gujr"  # Default fallback before file load
+            st.caption("Upload a document to auto-detect language.")
+    else:
+        src_lang = src_lang_map[src_lang_name]
+        
     # Engine Selection
     engine = st.selectbox(
         "Translation Engine",
@@ -164,12 +181,12 @@ with st.sidebar:
     
     # Check compatibility for local engine
     if src_lang == "eng_Latn" and engine == "Local (IndicTrans2)":
-        st.warning("⚠️ Local IndicTrans2 only supports Indic languages. For English documents, please select 'Cloud (Gemini)' or 'Cloud (Claude)'.")
+        st.warning("⚠️ Local IndicTrans2 only supports Indic-to-Indic languages. For English documents, please select 'Cloud (Gemini)' or 'Cloud (Claude)'.")
     
     # Engine specific configurations & notifications
     if engine == "Local (IndicTrans2)":
         st.markdown('<span class="privacy-tag privacy-local">🛡️ 100% Offline & Private</span>', unsafe_allow_html=True)
-        st.info("Uses local model files cached in models/ directory. Run is fully private.")
+        st.info("Uses local 1B model files cached in models/ directory. Run is fully private.")
         
         # Hugging Face Token (only needed if model is not downloaded yet)
         hf_token = st.text_input(
@@ -178,7 +195,7 @@ with st.sidebar:
             help="Your token is only checked if weights are missing locally. Leave blank if download is already complete."
         )
         st.caption("[Get Hugging Face Token](https://huggingface.co/settings/tokens)")
-        batch_size = st.slider("Batch Size (Lower if RAM < 8GB)", 2, 16, 8)
+        batch_size = st.slider("Batch Size (Lower if RAM < 8GB)", 2, 16, 4)
         api_key = hf_token
     else:
         st.markdown('<span class="privacy-tag privacy-cloud">⚠️ Sends Data Online</span>', unsafe_allow_html=True)
@@ -192,7 +209,7 @@ with st.sidebar:
             st.caption("[Get Anthropic API Key](https://console.anthropic.com/)")
             
     st.markdown("---")
-    st.caption("v1.3.0 | Multi-Source Local & Cloud Translation")
+    st.caption("v1.4.0 | Multi-Source Local & Cloud Translation")
 
 # ----------------- MAIN INTERFACE -----------------
 st.markdown("""
@@ -220,18 +237,26 @@ if uploaded_file:
         # Load progress DB
         db_helper = ProgressDB(temp_path)
         st.session_state.current_db = db_helper
-        st.session_state.glossary_cache = db_helper.get_glossary()
+        
+        # Load custom terminology
+        st.session_state.glossary_cache = load_glossary(db_helper)
         
         # Extract and parse file
         with st.spinner("Extracting content and parsing chapters..."):
             try:
-                chapters = extract_text_from_file(temp_path)
+                chapters, detected_lang = extract_text_from_file(temp_path)
+                
+                # Cache auto-detected language
+                lang_labels = {"guj_Gujr": "Gujarati", "hin_Deva": "Hindi", "eng_Latn": "English"}
+                st.session_state.detected_lang = detected_lang
+                st.session_state.detected_lang_label = lang_labels.get(detected_lang, "English")
+                
                 chapters_chunked = []
                 for title, text in chapters:
                     chunks = chunk_text(text)
                     chapters_chunked.append((title, chunks))
                     
-                # Initialize DB
+                # Initialize DB (resets DB if chunk count is mismatched with new file)
                 is_new = db_helper.initialize_chunks(chapters_chunked)
                 if is_new:
                     st.toast("Success! Initialized new book translation database.", icon="✨")
@@ -315,8 +340,11 @@ if st.session_state.current_db:
                 
         with col_btn3:
             if st.button("🔄 Reset Progress", use_container_width=True):
-                db_helper.reset_progress(force_all=True)
+                # Completely empty DB table to allow re-initialization of new chunks
+                with db_helper.conn:
+                    db_helper.conn.execute("DELETE FROM translation_progress")
                 st.session_state.translating = False
+                st.toast("Progress reset! Please re-upload the document or reload the page to load fresh chunks.", icon="🔄")
                 st.rerun()
                 
         st.markdown("---")
@@ -334,11 +362,15 @@ if st.session_state.current_db:
                 batch = pending_chunks[:batch_size]
                 batch_ids = [c[0] for c in batch]
                 batch_texts = [c[1] for c in batch]
+                # Apply Glossary Swap-in (Placeholder system)
+                swapped_texts = []
+                placeholder_maps = []
+                for t in batch_texts:
+                    s_text, p_map = swap_in(t, st.session_state.glossary_cache)
+                    swapped_texts.append(s_text)
+                    placeholder_maps.append(p_map)
                 
-                # Apply Glossary preprocessing
-                processed_texts = [apply_glossary(t, st.session_state.glossary_cache) for t in batch_texts]
-                
-                # Set translating status
+                # Set translating status in database
                 for c_id in batch_ids:
                     db_helper.update_chunk_translating(c_id)
                     
@@ -346,14 +378,20 @@ if st.session_state.current_db:
                 t0 = time.time()
                 try:
                     if engine == "Local (IndicTrans2)":
-                        translated_batch = translate_chunks_local(processed_texts, src_lang=src_lang, tgt_lang="ben_Beng", batch_size=batch_size, hf_token=api_key)
+                        translated_batch = translate_chunks_local(swapped_texts, src_lang=src_lang, tgt_lang="ben_Beng", batch_size=batch_size, hf_token=api_key)
                     elif engine == "Cloud (Gemini)":
-                        translated_batch = translate_chunks_gemini(processed_texts, api_key=api_key, src_lang=src_lang, tgt_lang="ben_Beng", glossary=st.session_state.glossary_cache)
+                        translated_batch = translate_chunks_gemini(swapped_texts, api_key=api_key, src_lang=src_lang, tgt_lang="ben_Beng", glossary=st.session_state.glossary_cache)
                     else:
-                        translated_batch = translate_chunks_claude(processed_texts, api_key=api_key, src_lang=src_lang, tgt_lang="ben_Beng", glossary=st.session_state.glossary_cache)
+                        translated_batch = translate_chunks_claude(swapped_texts, api_key=api_key, src_lang=src_lang, tgt_lang="ben_Beng", glossary=st.session_state.glossary_cache)
+                        
+                    # Apply Glossary Swap-out
+                    final_translated = []
+                    for trans_t, p_map in zip(translated_batch, placeholder_maps):
+                        r_text = swap_out(trans_t, p_map)
+                        final_translated.append(r_text)
                         
                     # Save translations
-                    for c_id, trans_txt in zip(batch_ids, translated_batch):
+                    for c_id, trans_txt in zip(batch_ids, final_translated):
                         db_helper.save_chunk(c_id, trans_txt)
                         
                     # Speed & ETA calculation
@@ -389,9 +427,32 @@ if st.session_state.current_db:
             
         # Reassemble & Download translated assets
         st.markdown("### 📥 Reassemble & Download Book")
-        col_d1, col_d2, col_d3 = st.columns(3)
+        col_d1, col_d2, col_d3, col_d4 = st.columns(4)
         
-        chapters_assembled = db_helper.get_assembled_chapters()
+        # Build assembled chapters dynamically with post-assembly corrections and translation memory
+        all_chunks = db_helper.get_all_chunks()
+        chapters_dict = {}
+        for chunk in all_chunks:
+            ch_idx = chunk['chapter_index']
+            ch_title = chunk['chapter_title']
+            orig = chunk['original_text']
+            trans = chunk['translated_text']
+            
+            # Post-assembly validation: Apply translation memory and cleanup
+            # unless the user has manually edited this chunk
+            if chunk['modified_by_user'] == 0 and trans:
+                mem_match = check_translation_memory(orig)
+                if mem_match:
+                    trans = mem_match
+                else:
+                    trans = clean_translated_text(trans)
+                    
+            if ch_idx not in chapters_dict:
+                chapters_dict[ch_idx] = (ch_title, [])
+            chapters_dict[ch_idx][1].append(trans)
+            
+        sorted_indices = sorted(chapters_dict.keys())
+        chapters_assembled = [chapters_dict[idx] for idx in sorted_indices]
         book_base_name = os.path.splitext(os.path.basename(st.session_state.book_path))[0]
         
         with col_d1:
@@ -451,6 +512,25 @@ if st.session_state.current_db:
                     )
             st.markdown("</div>", unsafe_allow_html=True)
 
+        with col_d4:
+            st.markdown("<div class='panel-container'>", unsafe_allow_html=True)
+            st.markdown("##### 📁 MS Word (.docx) Document")
+            docx_path = os.path.join("output", f"{book_base_name}_translated.docx")
+            if st.button("Generate Word File", key="gen_docx", use_container_width=True):
+                with st.spinner("Assembling Word document..."):
+                    assemble_output(chapters_assembled, "output", book_base_name, "docx")
+                    st.success("Word File Generated!")
+            if os.path.exists(docx_path):
+                with open(docx_path, "rb") as f:
+                    st.download_button(
+                        label="⬇️ Download Word Document",
+                        data=f.read(),
+                        file_name=os.path.basename(docx_path),
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True
+                    )
+            st.markdown("</div>", unsafe_allow_html=True)
+
     # ----------------- TAB 2: Interactive Editor -----------------
     with tab_editor:
         st.subheader("📝 Side-by-Side Sentence Inspector & Editor")
@@ -493,7 +573,7 @@ if st.session_state.current_db:
     # ----------------- TAB 3: Glossary Management -----------------
     with tab_glossary:
         st.subheader("🏷️ Custom Terminology Glossary")
-        st.write("Register custom dictionary mappings to bypass model translations for key terms.")
+        st.write("Register custom dictionary mappings to protect key terms (e.g. BAPS guru names, specific places).")
         
         # Form to add a glossary rule
         with st.form("glossary_tab_form", clear_on_submit=True):
@@ -506,7 +586,7 @@ if st.session_state.current_db:
             submit_g = st.form_submit_button("➕ Register Terminology Rule")
             if submit_g and g_orig and g_trans:
                 db_helper.save_glossary_term(g_orig, g_trans)
-                st.session_state.glossary_cache = db_helper.get_glossary()
+                st.session_state.glossary_cache = load_glossary(db_helper)
                 st.success(f"Added glossary entry: '{g_orig}' ➔ '{g_trans}'")
                 st.rerun()
                 
@@ -528,7 +608,7 @@ if st.session_state.current_db:
                 with col_w3:
                     if st.button("🗑️", key=f"del_tab_{row['Source Word']}"):
                         db_helper.delete_glossary_term(row["Source Word"])
-                        st.session_state.glossary_cache = db_helper.get_glossary()
+                        st.session_state.glossary_cache = load_glossary(db_helper)
                         st.toast("Glossary rule deleted!", icon="🗑️")
                         st.rerun()
         else:

@@ -75,8 +75,11 @@ def assemble_txt(chapters_data: list[tuple[str, list[str]]], output_path: str) -
     Assembles chapters into a standard, double-spaced text file.
     """
     with open(output_path, 'w', encoding='utf-8') as f:
-        for title, chunks in chapters_data:
-            f.write(f"\n\n=== {title} ===\n\n")
+        for idx, (title, chunks) in enumerate(chapters_data):
+            if not title.lower().startswith("page "):
+                f.write(f"\n\n=== {title} ===\n\n")
+            elif idx > 0:
+                f.write("\n\n" + "-" * 40 + "\n\n")
             paragraphs = reconstruct_paragraphs(chunks)
             f.write("\n\n".join(paragraphs))
             f.write("\n")
@@ -124,9 +127,16 @@ def assemble_pdf(chapters_data: list[tuple[str, list[str]]], output_path: str) -
     story.append(Paragraph("বই অনুবাদ (অনূদিত)", title_style))
     story.append(Spacer(1, 20))
     
+    from reportlab.platypus import PageBreak
+    
     for idx, (title, chunks) in enumerate(chapters_data):
-        story.append(Paragraph(title, title_style))
-        story.append(Spacer(1, 10))
+        # If it's a PDF page layout (starts with Page), do not write the title as text
+        if title.lower().startswith("page "):
+            if idx > 0:
+                story.append(PageBreak())
+        else:
+            story.append(Paragraph(title, title_style))
+            story.append(Spacer(1, 10))
         
         paragraphs = reconstruct_paragraphs(chunks)
         for para_text in paragraphs:
@@ -194,9 +204,53 @@ def assemble_epub(chapters_data: list[tuple[str, list[str]]], output_path: str) 
     epub.write_epub(output_path, book, {})
     return output_path
 
+def assemble_docx(chapters_data: list[tuple[str, list[str]]], output_path: str) -> str:
+    """
+    Assembles chapters into a standard Microsoft Word document (.docx) using python-docx.
+    """
+    import docx
+    from docx.shared import Pt
+    
+    doc = docx.Document()
+    
+    # Document main title
+    title_p = doc.add_paragraph()
+    run = title_p.add_run("বই অনুবাদ (অনূদিত)")
+    run.font.name = 'Calibri'
+    run.font.size = Pt(22)
+    run.bold = True
+    title_p.paragraph_format.space_after = Pt(24)
+    
+    for idx, (title, chunks) in enumerate(chapters_data):
+        # If it's a PDF page layout (starts with Page), do not write the title as text
+        if title.lower().startswith("page "):
+            if idx > 0:
+                doc.add_page_break()
+        else:
+            h = doc.add_heading(level=1)
+            run = h.add_run(title)
+            run.font.name = 'Calibri'
+            run.font.size = Pt(16)
+            run.bold = True
+            h.paragraph_format.space_before = Pt(18)
+            h.paragraph_format.space_after = Pt(12)
+        
+        paragraphs = reconstruct_paragraphs(chunks)
+        for para_text in paragraphs:
+            if para_text.strip():
+                p = doc.add_paragraph()
+                run = p.add_run(para_text)
+                run.font.name = 'Calibri'
+                run.font.size = Pt(11)
+                p.paragraph_format.line_spacing = 1.15
+                p.paragraph_format.space_after = Pt(8)
+                
+    doc.save(output_path)
+    return output_path
+
 def assemble_output(chapters_data: list[tuple[str, list[str]]], output_dir: str, base_filename: str, format_type: str) -> str:
     """
-    Top-level output assembly router. Supports 'txt', 'pdf', 'epub'.
+    Top-level output assembly router. Supports 'txt', 'pdf', 'epub', 'docx'.
     """
     os.makedirs(output_dir, exist_ok=True)
     
@@ -209,5 +263,8 @@ def assemble_output(chapters_data: list[tuple[str, list[str]]], output_dir: str,
     elif format_type == 'epub':
         out_path = os.path.join(output_dir, f"{base_filename}_translated.epub")
         return assemble_epub(chapters_data, out_path)
+    elif format_type == 'docx':
+        out_path = os.path.join(output_dir, f"{base_filename}_translated.docx")
+        return assemble_docx(chapters_data, out_path)
     else:
         raise ValueError(f"Unknown format type: {format_type}")

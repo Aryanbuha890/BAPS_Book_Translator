@@ -13,3 +13,4 @@ reportlab
 google-generativeai
 anthropic
 tqdm
+python-docx

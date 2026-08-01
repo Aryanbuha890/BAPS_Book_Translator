@@ -1,5 +1,83 @@
 import re
 
+# Dictionary of common Gujarati OCR typos and their correct spellings
+GUJARATI_OCR_REPLACEMENTS = {
+    "ગઢડા પ્રથિ": "ગઢડા પ્રથમ",
+    "સાતના": "સાતમા",
+    "દૃષ્ાાંત": "દૃષ્ટાંત",
+    "એિાાં": "એમાં",
+    "એિા": "એમાં",
+    "અમનિ": "અગ્નિ",
+    "અમનિનો": "અગ્નિનો",
+    "લોઢ ાં": "લોઢું",
+    "સ્પશશ": "સ્પર્શ",
+    "રાંગ": "રંગ",
+    "શ્યાિ": "શ્યામ",
+    "ગરિ": "ગરમ",
+    "વણશ": "વર્ણ",
+    "ગ ણાતીત": "ગુણાતીત",
+    "સદ્પ રુષ": "સત્પુરુષ",
+    "મનવાસ": "નિવાસ",
+    "મનષ્ક ળાનાંદ": "નિષ્કુળાનંદ",
+    "સિૂહ": "સન્મુખ",
+    "મશષ્ય": "શિષ્ય",
+    "મનિાશણીપણ ાં": "નિર્માનીપણું",
+    "દૃમષ્": "દ્રષ્ટિ",
+    "સારાંગપ ર": "સારંગપુર",
+    "અાંદર": "અંદર",
+    "અાંગે": "અંગે",
+    "તેિના": "તેમના",
+    "એિના": "એમના",
+    "સુજાણ ને": "સુજાણતે",
+    "પાવિાાં": "પાવમાં",
+    "રઘ ના": "રઘુના",
+    "સિજણ": "સમજણ",
+    "સિજ": "સમજ",
+    "મરવાજ": "મહારાજ",
+    "સાંપૂણશપણે": "સંપૂર્ણપણે",
+    "મહાંત": "મહંત",
+    "ઉલટી પલટ્ ાં": "ઉલટી પલટું",
+    "પોતાન ાં": "પોતાપણું",
+    "મનિાશણીપણ": "નિર્માનીપણું",
+    "વાતો કરે": "વાત કરે",
+    "બોલે છે": "બોલે છે",
+}
+
+def clean_gujarati_ocr_typos(text: str) -> str:
+    """
+    Cleans up common OCR typos in Gujarati text (like 'િ' misread as 'મ' or 'ર' and spacing issues).
+    """
+    # 1. Replace ellipsis/repeats (frequent cause of translation repetition loops)
+    text = re.sub(r'\.{2,}', '.', text)
+    text = re.sub(r'={2,}', '', text)  # remove repeating equals signs
+    
+    # 2. OCR spacing merges
+    text = text.replace("પ રુષોત્તિ", "પુરુષોત્તમ")
+    text = text.replace("સાંત", "સંત")
+    
+    # 3. Systematic Unicode corrections
+    text = text.replace("\u0abf\u0ac0", "મી") # િી -> મી
+    text = text.replace("િી", "મી")
+    
+    text = text.replace("\u0abf\u0abe", "મા") # િા -> મા
+    text = text.replace("િા", "મા")
+    
+    text = text.replace("\u0abf\u0ac3", "મૃ") # િૃ -> મૃ
+    text = text.replace("િૃ", "મૃ")
+    
+    # Prefix 'િ' U+0ABF at word boundaries is misread 'મ' U+0AAE
+    text = re.sub(r'(^|\s)\u0abf', r'\1મ', text)
+    text = re.sub(r'(^|\s)િ', r'\1મ', text)
+    
+    text = text.replace("હમર", "હરિ")
+    
+    # 4. Word-level replacements (sorted by length descending to prevent substring collisions)
+    sorted_replacements = sorted(GUJARATI_OCR_REPLACEMENTS.keys(), key=len, reverse=True)
+    for typo in sorted_replacements:
+        text = text.replace(typo, GUJARATI_OCR_REPLACEMENTS[typo])
+        
+    return text
+
 def normalize_text_spacing(text: str) -> str:
     """
     Normalizes text line breaks:
@@ -61,14 +139,18 @@ def break_long_sentence(text: str, max_len: int = 400) -> list[str]:
 def chunk_text(text: str) -> list[str]:
     """
     Chunks a chapter's text into small translation-friendly sentence strings.
+    - Cleans OCR typos from text before chunking.
     - Preserves paragraph boundaries as empty string elements: ""
     - Splits text on sentence boundaries: . ? ! । (danda) and ॥ (double danda)
     - Limits each chunk to 400 characters (splits long sentences at word boundaries)
     """
-    # 1. Normalize line wraps and spaces
-    normalized = normalize_text_spacing(text)
+    # 1. Clean OCR typos
+    cleaned_text = clean_gujarati_ocr_typos(text)
     
-    # 2. Process paragraph by paragraph
+    # 2. Normalize line wraps and spaces
+    normalized = normalize_text_spacing(cleaned_text)
+    
+    # 3. Process paragraph by paragraph
     paragraphs = normalized.split('\n\n')
     chunks = []
     
@@ -82,7 +164,8 @@ def chunk_text(text: str) -> list[str]:
         
         for sentence in sentences:
             sentence = sentence.strip()
-            if not sentence:
+            # Skip empty chunks and layout artifacts like raw page numbers (e.g. "1")
+            if not sentence or re.match(r'^\d+$', sentence):
                 continue
                 
             if len(sentence) <= 400:
