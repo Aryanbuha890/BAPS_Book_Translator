@@ -229,11 +229,14 @@ uploaded_file = st.file_uploader(
 if uploaded_file:
     # Set book path
     temp_path = os.path.join("temp", uploaded_file.name)
-    if st.session_state.book_path != temp_path:
+    file_hash = hash(uploaded_file.getvalue())
+    
+    if st.session_state.get("file_hash") != file_hash or st.session_state.book_path != temp_path:
         with open(temp_path, "wb") as f:
-            shutil.copyfileobj(uploaded_file, f)
+            f.write(uploaded_file.getvalue())
             
         st.session_state.book_path = temp_path
+        st.session_state.file_hash = file_hash
         # Load progress DB
         db_helper = ProgressDB(temp_path)
         st.session_state.current_db = db_helper
@@ -256,6 +259,15 @@ if uploaded_file:
                     chunks = chunk_text(text)
                     chapters_chunked.append((title, chunks))
                     
+                # Compare new chunks with DB to see if the file changed
+                stats = db_helper.get_progress_stats()
+                if stats['total_chunks'] > 0:
+                    db_chunks = [c['original_text'] for c in db_helper.get_all_chunks()]
+                    new_chunks = [chunk for _, chunks in chapters_chunked for chunk in chunks]
+                    if db_chunks != new_chunks:
+                        with db_helper.conn:
+                            db_helper.conn.execute("DELETE FROM translation_progress")
+                            
                 # Initialize DB (resets DB if chunk count is mismatched with new file)
                 is_new = db_helper.initialize_chunks(chapters_chunked)
                 if is_new:

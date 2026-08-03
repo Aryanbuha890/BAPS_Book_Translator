@@ -66,7 +66,7 @@ def _load_local_model(model_name: str, hf_token: str = None):
         )
 
     if _local_device is None:
-        _local_device = torch.device("cpu")
+        _local_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
     if _local_processor is None:
         _local_processor = IndicProcessor(inference_stage="model")
@@ -75,7 +75,7 @@ def _load_local_model(model_name: str, hf_token: str = None):
     if hf_token and hf_token.strip():
         kwargs["token"] = hf_token.strip()
     
-    print(f"Loading local checkpoint '{model_name}' on CPU...")
+    print(f"Loading local checkpoint '{model_name}' on {_local_device.type.upper()}...")
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_name, **kwargs)
         model = AutoModelForSeq2SeqLM.from_pretrained(model_name, **kwargs).to(_local_device)
