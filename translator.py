@@ -11,6 +11,20 @@ _local_models = {}
 _local_processor = None
 _local_device = None
 
+import unicodedata
+
+def clean_and_normalize(text: str) -> str:
+    """
+    Standardizes unicode representation, spacing, and punctuation variations.
+    """
+    # 1. Normalize unicode encoding to canonical NFC form
+    text = unicodedata.normalize('NFC', text)
+    # 2. Standardize spaces
+    text = re.sub(r'\s+', ' ', text.strip())
+    # 3. Clean up common quotation marks
+    text = text.replace('‘', "'").replace('’', "'").replace('“', '"').replace('”', '"')
+    return text
+
 # Load BAPS Translation Memory (Translation Memory / Verified Sentences)
 TM_PATH = "translation_memory.json"
 _translation_memory = {}
@@ -20,7 +34,7 @@ if os.path.exists(TM_PATH):
             raw_tm = json.load(f)
             # Normalize keys to standard spacing for robust matches
             for k, v in raw_tm.items():
-                normalized_k = re.sub(r'\s+', ' ', k.strip())
+                normalized_k = clean_and_normalize(k)
                 _translation_memory[normalized_k] = v
     except Exception as e:
         print(f"Warning: Failed to load translation memory: {e}")
@@ -30,8 +44,8 @@ def check_translation_memory(text: str) -> str:
     Checks if the normalized text exists in the translation memory.
     If yes, returns the verified translation. Else, returns None.
     """
-    normalized = re.sub(r'\s+', ' ', text.strip())
-    # Try exact match
+    normalized = clean_and_normalize(text)
+    # Try exact match on normalized key
     if normalized in _translation_memory:
         return _translation_memory[normalized]
         

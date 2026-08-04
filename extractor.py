@@ -1,8 +1,6 @@
 import os
 import re
 import fitz  # PyMuPDF
-import ebooklib
-from ebooklib import epub
 from bs4 import BeautifulSoup
 import warnings
 
@@ -117,6 +115,15 @@ def _extract_epub(file_path: str) -> list[tuple[str, str]]:
     """
     Extracts text from EPUB chapters following spine reading order.
     """
+    try:
+        import ebooklib
+        from ebooklib import epub
+    except ImportError:
+        raise ImportError(
+            "The 'ebooklib' package is required to process EPUB files. "
+            "Please run 'venv\\Scripts\\pip install ebooklib' in your environment to install it."
+        )
+
     chapters = []
     book = epub.read_epub(file_path)
     

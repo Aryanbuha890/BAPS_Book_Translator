@@ -5,7 +5,6 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from ebooklib import epub
 import warnings
 
 # Suppress warnings
@@ -151,6 +150,13 @@ def assemble_epub(chapters_data: list[tuple[str, list[str]]], output_path: str) 
     """
     Assembles chapters into a valid EPUB document using ebooklib.
     """
+    try:
+        from ebooklib import epub
+    except ImportError:
+        raise ImportError(
+            "The 'ebooklib' package is required to generate EPUB files. "
+            "Please run 'venv\\Scripts\\pip install ebooklib' in your environment to install it."
+        )
     book = epub.EpubBook()
     book.set_identifier('baps_translator_epub_id_1')
     book.set_title('Translated Bengali Book')
