@@ -11,25 +11,28 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 def detect_language(text: str) -> str:
     """
     Detects language based on character count in Unicode ranges.
-    Returns: 'guj_Gujr' (Gujarati), 'hin_Deva' (Hindi), or 'eng_Latn' (English/Default)
+    Prioritizes Indic scripts if they meet a minimal threshold, since
+    English characters are highly common as metadata/page headers.
     """
-    # Sample first 10,000 characters to keep it fast
-    sample = text[:10000]
+    # Sample first 20,000 characters to keep it fast
+    sample = text[:20000]
     
+    if not sample.strip():
+        return "unknown"
+        
     guj_count = len(re.findall(r'[\u0a80-\u0aff]', sample))
     hin_count = len(re.findall(r'[\u0900-\u097f]', sample))
-    eng_count = len(re.findall(r'[a-zA-Z]', sample))
     
-    counts = {
-        "guj_Gujr": guj_count,
-        "hin_Deva": hin_count,
-        "eng_Latn": eng_count
-    }
-    
-    max_lang = max(counts, key=counts.get)
-    if counts[max_lang] == 0:
-        return "eng_Latn"
-    return max_lang
+    # If there is a substantial amount of Gujarati script, it is Gujarati
+    if guj_count > 50:
+        return "guj_Gujr"
+        
+    # If there is a substantial amount of Devanagari script, it is Hindi
+    if hin_count > 50:
+        return "hin_Deva"
+        
+    # Otherwise, default to English
+    return "eng_Latn"
 
 def extract_text_from_file(file_path: str) -> tuple[list[tuple[str, str]], str]:
     """
@@ -54,8 +57,16 @@ def extract_text_from_file(file_path: str) -> tuple[list[tuple[str, str]], str]:
     else:
         raise ValueError(f"Unsupported file format: {ext}. Only PDF, EPUB, and TXT are supported.")
         
-    # Concatenate sample text to detect document language
-    sample_text = " ".join([ch_text for _, ch_text in chapters[:3]])
+    # Concatenate sample text from the start, middle, and end of the chapters
+    # to avoid cover page/introductory page bias (e.g. copyright blocks in English)
+    sample_chunks = []
+    if chapters:
+        sample_chunks.append(chapters[0][1])
+        if len(chapters) > 2:
+            sample_chunks.append(chapters[len(chapters) // 2][1])
+        if len(chapters) > 1 and len(chapters) != len(chapters) // 2:
+            sample_chunks.append(chapters[-1][1])
+    sample_text = " ".join(sample_chunks)
     detected_lang = detect_language(sample_text)
     
     return chapters, detected_lang

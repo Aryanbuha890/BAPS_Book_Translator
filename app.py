@@ -163,12 +163,15 @@ with st.sidebar:
     
     # Resolve source language
     if src_lang_name == "Auto-detect":
-        if st.session_state.detected_lang:
+        if st.session_state.detected_lang and st.session_state.detected_lang != "unknown":
             src_lang = st.session_state.detected_lang
             st.caption(f"✓ Detected Script: **{st.session_state.detected_lang_label}**")
         else:
             src_lang = "guj_Gujr"  # Default fallback before file load
-            st.caption("Upload a document to auto-detect language.")
+            if st.session_state.detected_lang == "unknown":
+                st.caption("⚠️ Could not detect script/language. Please select Source Language manually.")
+            else:
+                st.caption("Upload a document to auto-detect language.")
     else:
         src_lang = src_lang_map[src_lang_name]
         
@@ -179,9 +182,16 @@ with st.sidebar:
         help="Local runs 100% offline & privately on your CPU. Cloud requires internet but translates faster."
     )
     
-    # Check compatibility for local engine
-    if src_lang == "eng_Latn" and engine == "Local (IndicTrans2)":
-        st.warning("⚠️ Local IndicTrans2 only supports Indic-to-Indic languages. For English documents, please select 'Cloud (Gemini)' or 'Cloud (Claude)'.")
+    # Check compatibility/download state for local engine
+    if engine == "Local (IndicTrans2)":
+        if src_lang == "eng_Latn":
+            model_dir = os.path.join("models", "models--ai4bharat--indictrans2-en-indic-1B")
+            if not os.path.isdir(model_dir):
+                st.warning("⚠️ Local English-to-Bengali translation requires the English-to-Indic model. Please run `python download_model.py` and select Option 2 or 3 to download the weights.")
+        else:
+            model_dir = os.path.join("models", "models--ai4bharat--indictrans2-indic-indic-1B")
+            if not os.path.isdir(model_dir):
+                st.warning("⚠️ Local Indic-to-Bengali translation requires the Indic-to-Indic model. Please run `python download_model.py` and select Option 1 or 3 to download the weights.")
     
     # Engine specific configurations & notifications
     if engine == "Local (IndicTrans2)":
@@ -247,33 +257,42 @@ if uploaded_file:
         # Extract and parse file
         with st.spinner("Extracting content and parsing chapters..."):
             try:
-                chapters, detected_lang = extract_text_from_file(temp_path)
+                 chapters, detected_lang = extract_text_from_file(temp_path)
                 
-                # Cache auto-detected language
-                lang_labels = {"guj_Gujr": "Gujarati", "hin_Deva": "Hindi", "eng_Latn": "English"}
-                st.session_state.detected_lang = detected_lang
-                st.session_state.detected_lang_label = lang_labels.get(detected_lang, "English")
-                
-                chapters_chunked = []
-                for title, text in chapters:
-                    chunks = chunk_text(text)
-                    chapters_chunked.append((title, chunks))
-                    
-                # Compare new chunks with DB to see if the file changed
-                stats = db_helper.get_progress_stats()
-                if stats['total_chunks'] > 0:
-                    db_chunks = [c['original_text'] for c in db_helper.get_all_chunks()]
-                    new_chunks = [chunk for _, chunks in chapters_chunked for chunk in chunks]
-                    if db_chunks != new_chunks:
-                        with db_helper.conn:
-                            db_helper.conn.execute("DELETE FROM translation_progress")
-                            
-                # Initialize DB (resets DB if chunk count is mismatched with new file)
-                is_new = db_helper.initialize_chunks(chapters_chunked)
-                if is_new:
-                    st.toast("Success! Initialized new book translation database.", icon="✨")
-                else:
-                    st.toast("Welcome back! Loaded existing translation progress.", icon="♻️")
+                 total_text_length = sum(len(text.strip()) for _, text in chapters) if chapters else 0
+                 if total_text_length == 0:
+                     st.error("⚠️ No text could be extracted from this document. It might be a scanned PDF or empty. Please upload a text-based PDF or convert it using OCR first.")
+                     st.session_state.book_path = None
+                     st.session_state.current_db = None
+                     st.session_state.detected_lang = None
+                     st.session_state.detected_lang_label = None
+                     st.session_state.file_hash = None
+                 else:
+                     # Cache auto-detected language
+                     lang_labels = {"guj_Gujr": "Gujarati", "hin_Deva": "Hindi", "eng_Latn": "English", "unknown": "Unknown"}
+                     st.session_state.detected_lang = detected_lang
+                     st.session_state.detected_lang_label = lang_labels.get(detected_lang, "Unknown")
+                     
+                     chapters_chunked = []
+                     for title, text in chapters:
+                         chunks = chunk_text(text)
+                         chapters_chunked.append((title, chunks))
+                         
+                     # Compare new chunks with DB to see if the file changed
+                     stats = db_helper.get_progress_stats()
+                     if stats['total_chunks'] > 0:
+                         db_chunks = [c['original_text'] for c in db_helper.get_all_chunks()]
+                         new_chunks = [chunk for _, chunks in chapters_chunked for chunk in chunks]
+                         if db_chunks != new_chunks:
+                             with db_helper.conn:
+                                 db_helper.conn.execute("DELETE FROM translation_progress")
+                                 
+                     # Initialize DB (resets DB if chunk count is mismatched with new file)
+                     is_new = db_helper.initialize_chunks(chapters_chunked)
+                     if is_new:
+                         st.toast("Success! Initialized new book translation database.", icon="✨")
+                     else:
+                         st.toast("Welcome back! Loaded existing translation progress.", icon="♻️")
             except Exception as e:
                 st.error(f"Error reading file: {e}")
                 st.session_state.book_path = None
@@ -335,8 +354,21 @@ if st.session_state.current_db:
             if stats['percent_complete'] < 100:
                 btn_label = "▶️ Start Translation" if stats['completed_chunks'] == 0 else "▶️ Resume Translation"
                 if st.button(btn_label, use_container_width=True, disabled=st.session_state.translating):
-                    if src_lang == "eng_Latn" and engine == "Local (IndicTrans2)":
-                        st.error("Local IndicTrans2 only supports Indic languages. Select Cloud (Gemini) or Cloud (Claude) to translate English.")
+                    if engine == "Local (IndicTrans2)":
+                        if src_lang == "eng_Latn":
+                            model_dir = os.path.join("models", "models--ai4bharat--indictrans2-en-indic-1B")
+                            if not os.path.isdir(model_dir):
+                                st.error("Local English-to-Bengali model weights not found. Please run `python download_model.py` and select Option 2 or 3 first.")
+                            else:
+                                st.session_state.translating = True
+                                st.rerun()
+                        else:
+                            model_dir = os.path.join("models", "models--ai4bharat--indictrans2-indic-indic-1B")
+                            if not os.path.isdir(model_dir):
+                                st.error("Local Indic-to-Bengali model weights not found. Please run `python download_model.py` and select Option 1 or 3 first.")
+                            else:
+                                st.session_state.translating = True
+                                st.rerun()
                     elif engine != "Local (IndicTrans2)" and not api_key:
                         st.error("API Key is required for cloud translation engines!")
                     else:
