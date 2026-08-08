@@ -9,7 +9,6 @@ A Streamlit web application that translates BAPS Swaminarayan religious books fr
 | Feature | Detail |
 |---|---|
 | **Local translation** | IndicTrans2 1B model — 100% offline, fully private |
-| **Alternative local model** | NLLB-200-3.3B (larger, supports all resource tiers) |
 | **Cloud backup** | Gemini 2.0 Flash · Claude Haiku 4.5 |
 | **Image input** | Scanned PDF pages via Tesseract OCR; photo-of-page via Claude Vision |
 | **Translation Memory (TM)** | Exact + fuzzy (≥92%) matching — 100% accuracy on matched sentences |
@@ -45,17 +44,14 @@ python download_model.py
 python download_model.py
 ```
 
-| Option | Model | Download | RAM needed | Best for |
-|---|---|---|---|---|
-| `a` | NLLB-200-distilled-600M | ~2.5 GB | 4 GB | Low-end / CPU-only |
-| `b` | NLLB-200-distilled-1.3B | ~5 GB | 8 GB | Mid-range |
-| `c` | NLLB-200-3.3B | ~13 GB | 14 GB | High-end / GPU |
-| `1` | IndicTrans2 Indic-Indic 1B ⭐ | ~4.5 GB | 4 GB | Default recommended |
-| `2` | IndicTrans2 En-Indic 1B | ~4.5 GB | 4 GB | English source |
+| Option | Model | Download | RAM needed |
+|---|---|---|---|
+| `1` ⭐ | IndicTrans2 Indic-Indic 1B | ~4.5 GB | 4 GB |
+| `2` | IndicTrans2 En-Indic 1B | ~4.5 GB | 4 GB |
+| `3` | Both models | ~9 GB | 4 GB |
 
-> **IndicTrans2 requires a HuggingFace token** — accept the model terms at  
-> https://huggingface.co/ai4bharat/indictrans2-indic-indic-1B first.  
-> NLLB models are public — no token needed.
+> **Requires a HuggingFace token** — accept the model terms at  
+> https://huggingface.co/ai4bharat/indictrans2-indic-indic-1B first.
 
 ---
 
@@ -168,7 +164,7 @@ BAPS_Book_Translator/
 All settings are in the sidebar:
 
 - **Source language** — Auto-detect, Gujarati, Hindi, English
-- **Engine** — Local (IndicTrans2) · Local (NLLB) · Cloud (Gemini) · Cloud (Claude)
+- **Engine** — Local (IndicTrans2) · Cloud (Gemini) · Cloud (Claude)
 - **Batch size** — Lower if RAM < 8 GB
 - **HuggingFace token** — Only needed for first IndicTrans2 download
 

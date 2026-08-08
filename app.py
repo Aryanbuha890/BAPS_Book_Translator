@@ -11,7 +11,6 @@ from chunker import chunk_text
 from progress import ProgressDB
 from translator import (
     translate_chunks_local,
-    translate_chunks_nllb,
     translate_chunks_gemini,
     translate_chunks_claude,
     clean_translated_text,
@@ -219,34 +218,12 @@ with st.sidebar:
     # Engine Selection
     engine = st.selectbox(
         "Translation Engine",
-        ["Local (IndicTrans2)", "Local (NLLB-200-3.3B)", "Cloud (Gemini)", "Cloud (Claude)"],
-        help="IndicTrans2 is the default — optimised for Indic scripts, fastest, fully offline. NLLB is available as an alternative. Cloud requires internet."
+        ["Local (IndicTrans2)", "Cloud (Gemini)", "Cloud (Claude)"],
+        help="Local (IndicTrans2) runs 100% offline and privately on your CPU/GPU. Cloud requires internet but may handle novel sentences differently."
     )
     
     # Check compatibility/download state for local engine and preload model
-    if engine == "Local (NLLB-200-3.3B)":
-        # Auto-detect which NLLB variant is installed
-        _nllb_variants = [
-            ("nllb-200-3.3B",           "NLLB-200-3.3B (best quality)"),
-            ("nllb-200-distilled-1.3B", "NLLB-200-1.3B (balanced)"),
-            ("nllb-200-distilled-600M", "NLLB-200-600M (low-resource)"),
-        ]
-        _nllb_found = next((d for d, _ in _nllb_variants if os.path.isdir(os.path.join("models", d))), None)
-        _nllb_label = next((l for d, l in _nllb_variants if d == _nllb_found), None)
-
-        if _nllb_found:
-            st.markdown('<span class="privacy-tag privacy-local">🛡️ 100% Offline & Private</span>', unsafe_allow_html=True)
-            st.success(f"✓ Using {_nllb_label}")
-            hf_token = ""
-            batch_size = st.slider("Batch Size (lower = less RAM)", 1, 8, 2)
-            api_key = ""
-        else:
-            st.warning("⚠️ No NLLB model downloaded yet.")
-            st.info("Run in terminal:\n```\npython download_model.py\n```\nIt will auto-detect the right size for your system.")
-            hf_token = ""
-            batch_size = 2
-            api_key = ""
-    elif engine == "Local (IndicTrans2)":
+    if engine == "Local (IndicTrans2)":
         if src_lang == "eng_Latn":
             model_dir = os.path.join("models", "indictrans2-en-indic-1B")
             if not os.path.isdir(model_dir):
@@ -501,17 +478,7 @@ if st.session_state.current_db:
             if stats['percent_complete'] < 100:
                 btn_label = "▶️ Start Translation" if stats['completed_chunks'] == 0 else "▶️ Resume Translation"
                 if st.button(btn_label, use_container_width=True, disabled=st.session_state.translating):
-                    if engine == "Local (NLLB-200-3.3B)":
-                        _any_nllb = any(
-                            os.path.isdir(os.path.join("models", d))
-                            for d in ("nllb-200-3.3B", "nllb-200-distilled-1.3B", "nllb-200-distilled-600M")
-                        )
-                        if not _any_nllb:
-                            st.error("No NLLB model found. Run `python download_model.py` — it will pick the right size for your system.")
-                        else:
-                            st.session_state.translating = True
-                            st.rerun()
-                    elif engine == "Local (IndicTrans2)":
+                    if engine == "Local (IndicTrans2)":
                         if src_lang == "eng_Latn":
                             model_dir = os.path.join("models", "indictrans2-en-indic-1B")
                             if not os.path.isdir(model_dir):
@@ -526,7 +493,7 @@ if st.session_state.current_db:
                             else:
                                 st.session_state.translating = True
                                 st.rerun()
-                    elif engine not in ("Local (NLLB-200-3.3B)", "Local (IndicTrans2)") and not api_key:
+                    elif engine != "Local (IndicTrans2)" and not api_key:
                         st.error("API Key is required for cloud translation engines!")
                     else:
                         st.session_state.translating = True
@@ -586,9 +553,7 @@ if st.session_state.current_db:
                 # Perform translation
                 t0 = time.time()
                 try:
-                    if engine == "Local (NLLB-200-3.3B)":
-                        translated_batch = translate_chunks_nllb(swapped_texts, src_lang=src_lang, tgt_lang="ben_Beng", batch_size=batch_size, hf_token=api_key)
-                    elif engine == "Local (IndicTrans2)":
+                    if engine == "Local (IndicTrans2)":
                         translated_batch = translate_chunks_local(swapped_texts, src_lang=src_lang, tgt_lang="ben_Beng", batch_size=batch_size, hf_token=api_key)
                     elif engine == "Cloud (Gemini)":
                         translated_batch = translate_chunks_gemini(swapped_texts, api_key=api_key, src_lang=src_lang, tgt_lang="ben_Beng", glossary=st.session_state.glossary_cache, prev_context=st.session_state.prev_translated_chunk)
