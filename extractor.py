@@ -4,44 +4,31 @@ import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
 import warnings
 
-# Suppress ebooklib third party warnings about UserWarning: My/File/Path is not a valid EPUB
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 def detect_language(text: str) -> str:
-    """
-    Detects language based on character count in Unicode ranges.
-    Prioritizes Indic scripts if they meet a minimal threshold, since
-    English characters are highly common as metadata/page headers.
-    """
-    # Sample first 20,000 characters to keep it fast
     sample = text[:20000]
-    
     if not sample.strip():
         return "unknown"
-        
-    guj_count = len(re.findall(r'[\u0a80-\u0aff]', sample))
-    hin_count = len(re.findall(r'[\u0900-\u097f]', sample))
-    
-    # If there is a substantial amount of Gujarati script, it is Gujarati
+    guj_count = len(re.findall(r'[઀-૿]', sample))
+    hin_count = len(re.findall(r'[ऀ-ॿ]', sample))
     if guj_count > 50:
         return "guj_Gujr"
-        
-    # If there is a substantial amount of Devanagari script, it is Hindi
     if hin_count > 50:
         return "hin_Deva"
-        
-    # Otherwise, default to English
     return "eng_Latn"
 
-def extract_text_from_file(file_path: str) -> tuple[list[tuple[str, str]], str]:
+def extract_text_from_file(file_path: str, use_ocr_fallback: bool = True) -> tuple:
     """
-    Auto-detects file extension, extracts content page-by-page or chapter-by-chapter,
-    and automatically detects the source document language.
-    
-    Returns a tuple: (list_of_chapters, detected_lang_tag)
-    Chapters is a list of tuples: [(chapter_title, chapter_text), ...]
-    detected_lang_tag is one of: 'guj_Gujr', 'hin_Deva', 'eng_Latn'
+    Auto-detects file extension, extracts content, and returns:
+      (list_of_chapters, detected_lang_tag, empty_page_count)
+
+    Chapters: [(chapter_title, chapter_text), ...]
+    empty_page_count: number of pages/sections that had no extractable text (image-only scans).
+
+    use_ocr_fallback: if True and pytesseract is available, runs Tesseract on empty PDF pages
+                      to recover text from scanned images.
     """
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -49,16 +36,17 @@ def extract_text_from_file(file_path: str) -> tuple[list[tuple[str, str]], str]:
     ext = os.path.splitext(file_path)[1].lower()
 
     if ext == '.pdf':
-        chapters = _extract_pdf(file_path)
+        chapters, empty_page_count = _extract_pdf(file_path, use_ocr_fallback=use_ocr_fallback)
     elif ext == '.epub':
         chapters = _extract_epub(file_path)
+        empty_page_count = 0
     elif ext == '.txt':
         chapters = _extract_txt(file_path)
+        empty_page_count = 0
     else:
         raise ValueError(f"Unsupported file format: {ext}. Only PDF, EPUB, and TXT are supported.")
-        
-    # Concatenate sample text from the start, middle, and end of the chapters
-    # to avoid cover page/introductory page bias (e.g. copyright blocks in English)
+
+    # Sample from start, middle and end to reduce cover-page bias
     sample_chunks = []
     if chapters:
         sample_chunks.append(chapters[0][1])
@@ -68,17 +56,33 @@ def extract_text_from_file(file_path: str) -> tuple[list[tuple[str, str]], str]:
             sample_chunks.append(chapters[-1][1])
     sample_text = " ".join(sample_chunks)
     detected_lang = detect_language(sample_text)
-    
-    return chapters, detected_lang
 
-def _extract_pdf(file_path: str) -> list[tuple[str, str]]:
+    return chapters, detected_lang, empty_page_count
+
+def _try_ocr_page(page) -> str:
     """
-    Extract PDF text page by page. Each page becomes one "chapter" unit
-    for simplicity; headings within a page are detected by relative font
-    size and prefixed on their own line so assembler.py can style them.
+    Renders a PyMuPDF page to an image and runs Tesseract OCR for Gujarati.
+    Returns the OCR'd text, or "" if pytesseract/Pillow is not installed.
+    """
+    try:
+        import pytesseract
+        from PIL import Image
+        pix = page.get_pixmap(dpi=300)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        text = pytesseract.image_to_string(img, lang='guj')
+        return text.strip()
+    except Exception:
+        return ""
+
+def _extract_pdf(file_path: str, use_ocr_fallback: bool = True) -> tuple:
+    """
+    Extracts PDF text page by page. For pages with no text layer (scanned images),
+    optionally falls back to Tesseract OCR.
+    Returns (chapters, empty_page_count).
     """
     doc = fitz.open(file_path)
     chapters = []
+    empty_page_count = 0
 
     for page_num in range(len(doc)):
         page = doc[page_num]
@@ -86,21 +90,19 @@ def _extract_pdf(file_path: str) -> list[tuple[str, str]]:
             blocks = page.get_text("dict")["blocks"]
         except Exception:
             blocks = []
-            
+
         page_lines = []
         sizes = []
         for b in blocks:
             for l in b.get("lines", []):
                 for span in l.get("spans", []):
                     sizes.append(span["size"])
-                    
+
         body_size = max(set(sizes), key=sizes.count) if sizes else 10
 
         for block in blocks:
-            # Only process text blocks, ignore image blocks (type 1)
             if block.get("type", 0) != 0:
                 continue
-                
             for line in block.get("lines", []):
                 spans = line.get("spans", [])
                 if not spans:
@@ -110,35 +112,40 @@ def _extract_pdf(file_path: str) -> list[tuple[str, str]]:
                     continue
                 avg_size = sum(s["size"] for s in spans) / len(spans)
                 if avg_size > body_size * 1.15:
-                    page_lines.append(f"## {text}")  # heading marker
+                    page_lines.append(f"## {text}")
                 else:
                     page_lines.append(text)
-            page_lines.append("")  # paragraph break after each block
+            page_lines.append("")
 
         chapter_text = "\n".join(page_lines).strip("\n")
+
+        # OCR fallback for image-only pages
+        if not chapter_text and use_ocr_fallback:
+            chapter_text = _try_ocr_page(page)
+            if not chapter_text:
+                empty_page_count += 1
+        elif not chapter_text:
+            empty_page_count += 1
+
         if chapter_text:
             chapters.append((f"Page {page_num + 1}", chapter_text))
 
     doc.close()
-    return chapters
+    return chapters, empty_page_count
 
-def _extract_epub(file_path: str) -> list[tuple[str, str]]:
-    """
-    Extracts text from EPUB chapters following spine reading order.
-    """
+def _extract_epub(file_path: str) -> list:
     try:
         import ebooklib
         from ebooklib import epub
     except ImportError:
         raise ImportError(
             "The 'ebooklib' package is required to process EPUB files. "
-            "Please run 'venv\\Scripts\\pip install ebooklib' in your environment to install it."
+            "Please run 'pip install ebooklib' in your environment."
         )
 
     chapters = []
     book = epub.read_epub(file_path)
-    
-    # Extract items in spine order
+
     spine_items = []
     for item_ref in book.spine:
         item_id = item_ref[0] if isinstance(item_ref, tuple) else item_ref
@@ -150,27 +157,22 @@ def _extract_epub(file_path: str) -> list[tuple[str, str]]:
         html_content = item.get_content()
         soup = BeautifulSoup(html_content, 'html.parser')
 
-        # Try to find a heading for chapter title
         heading = soup.find(['h1', 'h2', 'h3', 'h4'])
         title = heading.get_text().strip() if heading else f"Chapter {idx + 1}"
 
-        # Extract paragraphs & headings
         paragraphs = []
         for block in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li']):
             text = block.get_text().strip()
             if text:
                 paragraphs.append(text)
 
-        # Fallback to div tags if no semantic p/headings exist
         if not paragraphs:
             for block in soup.find_all('div'):
-                # Avoid inner duplicates by selecting divs that don't have block children
                 if not block.find('div') and not block.find('p'):
                     text = block.get_text().strip()
                     if text:
                         paragraphs.append(text)
 
-        # Final fallback to raw text block
         if not paragraphs:
             chapter_text = soup.get_text(separator="\n\n").strip()
         else:
@@ -178,13 +180,10 @@ def _extract_epub(file_path: str) -> list[tuple[str, str]]:
 
         if chapter_text.strip():
             chapters.append((title, chapter_text))
-            
+
     return chapters
 
-def _extract_txt(file_path: str) -> list[tuple[str, str]]:
-    """
-    Reads plain text files using standard encodings with fallback.
-    """
+def _extract_txt(file_path: str) -> list:
     encodings = ['utf-8', 'latin-1', 'cp1252', 'utf-16']
     text = ""
     for enc in encodings:
@@ -194,12 +193,33 @@ def _extract_txt(file_path: str) -> list[tuple[str, str]]:
             break
         except Exception:
             continue
-            
+
     if not text:
-        # Last resort fallback read
         with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
             text = f.read()
-            
-    # Treat entire txt document as a single unit
+
     title = os.path.basename(file_path)
     return [(title, text)]
+
+def extract_text_from_image(image_path: str) -> str:
+    """
+    Extracts Gujarati text from an image file using Tesseract OCR.
+    Requires: pip install pytesseract Pillow
+    System: tesseract binary with guj.traineddata installed.
+    Returns the extracted text string.
+    """
+    try:
+        import pytesseract
+        from PIL import Image
+        img = Image.open(image_path)
+        # Use Gujarati + English (eng handles numbers/punctuation better)
+        text = pytesseract.image_to_string(img, lang='guj+eng')
+        return text.strip()
+    except ImportError:
+        raise ImportError(
+            "pytesseract and Pillow are required for image OCR. "
+            "Run: pip install pytesseract Pillow\n"
+            "Also install Tesseract binary: https://github.com/UB-Mannheim/tesseract/wiki"
+        )
+    except Exception as e:
+        raise RuntimeError(f"OCR failed: {e}")

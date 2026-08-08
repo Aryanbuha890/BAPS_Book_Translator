@@ -24,9 +24,11 @@ __pycache__/
 output/
 *_translated.*
 
-# Local Debug Scripts
+# Local Debug / Test Scripts
 diagnose*.py
 test_translator.py
+test_accuracy.py
+test_compare.py
 check_*.py
 debug_*.py
 inspect_*.py

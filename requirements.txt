@@ -1,10 +1,11 @@
 torch
-transformers>=4.45.0,<4.48.0
+transformers>=4.45.0,<5.0.0
 sentencepiece
 protobuf
 sacremoses
 indic-transliteration
-# indictranstoolkit (Commented out: using local pure-Python fallback to bypass compiler setup)
+indictranstoolkit
+rapidfuzz
 PyMuPDF
 ebooklib
 beautifulsoup4
@@ -14,3 +15,5 @@ google-generativeai
 anthropic
 tqdm
 python-docx
+pytesseract
+Pillow

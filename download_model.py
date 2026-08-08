@@ -1,76 +1,82 @@
 import os
-import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from huggingface_hub import snapshot_download
 
-def download_checkpoint(model_name: str, token: str):
+
+def download_indictrans(model_name: str, token: str) -> bool:
     """
-    Downloads and caches a specific Hugging Face model checkpoint.
+    Downloads an IndicTrans2 model via snapshot_download into models/<short-name>/.
+    Uses snapshot_download to avoid the tokenizer class resolution issue with older cache formats.
     """
-    print(f"\n--- Downloading: '{model_name}' ---")
-    print("Saving tokenizer and weights locally to the 'models/' cache directory...\n")
-    
+    short_name = model_name.split("/")[-1]
+    local_dir = os.path.join("models", short_name)
+    print(f"\n--- Downloading: '{model_name}' → {local_dir} ---")
     try:
-        # Download tokenizer
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_name, 
-            trust_remote_code=True, 
-            cache_dir="models", 
-            token=token
+        snapshot_download(
+            repo_id=model_name,
+            local_dir=local_dir,
+            token=token if token else None,
+            ignore_patterns=["*.msgpack", "flax_model*", "tf_model*", "rust_model*"],
         )
-        print(f"✓ Tokenizer for '{model_name}' downloaded successfully.")
-        
-        # Download model
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_name, 
-            trust_remote_code=True, 
-            cache_dir="models", 
-            token=token
-        )
-        print(f"✓ Model weights for '{model_name}' downloaded successfully.")
+        print(f"✓ Downloaded successfully.")
+        # Quick load test
+        print("  Verifying tokenizer...")
+        AutoTokenizer.from_pretrained(local_dir, trust_remote_code=True)
+        print("  ✓ Tokenizer OK")
         return True
     except Exception as e:
-        print(f"\n❌ Error downloading '{model_name}': {e}")
-        print("Please check:")
-        print("1. Your Hugging Face token is correct and active.")
-        print(f"2. You have accepted the model terms at: https://huggingface.co/{model_name}")
+        print(f"\n❌ Error: {e}")
+        print(f"  Check: https://huggingface.co/{model_name}")
+        print("  You must accept the model terms before downloading.")
         return False
 
+
 def main():
-    print("==============================================================")
-    print("📚 BAPS Book Translator - Model Downloader")
-    print("==============================================================")
-    print("Select the IndicTrans2 1B parameter checkpoint to download:")
-    print("1. Indic-to-Indic 1B model (For Hindi / Gujarati to Bengali)")
-    print("   -> 'ai4bharat/indictrans2-indic-indic-1B'")
-    print("2. English-to-Indic 1B model (For English to Bengali)")
-    print("   -> 'ai4bharat/indictrans2-en-indic-1B'")
-    print("3. Both 1B models (Recommended for full multi-source capability)")
-    print("==============================================================")
-    
-    choice = input("Enter choice (1, 2, or 3): ").strip()
-    if choice not in ('1', '2', '3'):
-        print("Error: Invalid choice.")
+    print("=" * 65)
+    print("📚 BAPS Book Translator — Model Downloader")
+    print("=" * 65)
+    print()
+    print("Select the IndicTrans2 model to download:")
+    print()
+    print("  1) Indic-to-Indic 1B  ⭐ Recommended")
+    print("     For Gujarati / Hindi → Bengali")
+    print("     → ai4bharat/indictrans2-indic-indic-1B  (~4.5 GB)")
+    print()
+    print("  2) English-to-Indic 1B")
+    print("     For English → Bengali")
+    print("     → ai4bharat/indictrans2-en-indic-1B  (~4.5 GB)")
+    print()
+    print("  3) Both models")
+    print()
+    print("=" * 65)
+    print("Requires: HuggingFace account + accept model terms at")
+    print("  https://huggingface.co/ai4bharat/indictrans2-indic-indic-1B")
+    print("=" * 65)
+
+    choice = input("\nEnter choice (1, 2, or 3): ").strip()
+    if choice not in ("1", "2", "3"):
+        print("Invalid choice.")
         return
-        
-    token = input("\nPlease enter your Hugging Face Token (starts with hf_...): ").strip()
+
+    token = input("\nHuggingFace Token (hf_...): ").strip()
     if not token:
-        print("Error: Hugging Face Token is required.")
+        print("Token is required for ai4bharat gated models.")
         return
-        
+
     success = True
-    if choice in ('1', '3'):
-        ok = download_checkpoint("ai4bharat/indictrans2-indic-indic-1B", token)
+    if choice in ("1", "3"):
+        ok = download_indictrans("ai4bharat/indictrans2-indic-indic-1B", token)
         success = success and ok
-        
-    if choice in ('2', '3'):
-        ok = download_checkpoint("ai4bharat/indictrans2-en-indic-1B", token)
+
+    if choice in ("2", "3"):
+        ok = download_indictrans("ai4bharat/indictrans2-en-indic-1B", token)
         success = success and ok
-        
+
     if success:
-        print("\n🎉 Success! All selected model files are cached locally in your 'models/' directory.")
-        print("You can now close this window and run the translator fully offline.")
+        print("\n🎉 Done! Model files are in 'models/'. Run: streamlit run app.py")
     else:
-        print("\n⚠️ Download complete, but one or more operations failed. Please review the error messages above.")
+        print("\n⚠️ One or more downloads failed. Check the errors above.")
+
 
 if __name__ == "__main__":
     main()

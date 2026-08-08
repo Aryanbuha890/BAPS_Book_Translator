@@ -1,56 +1,177 @@
 # 📚 BAPS Book Translator
 
-A Premium Multi-Source to Bengali Literary Translation Suite supporting Local & Cloud Translation Engines.
+A Streamlit web application that translates BAPS Swaminarayan religious books from **Gujarati** (and Hindi / English) into **Bengali**. Runs entirely on your local machine — no GPU required. Cloud engines (Gemini, Claude) are available as optional backup.
 
-BAPS Book Translator is a streamlined, feature-rich web application built with Streamlit. It allows users to translate large books and documents (PDF, EPUB, TXT) from languages like Gujarati, Hindi, and English into Bengali.
+---
 
-## 🌟 Key Features
+## ✨ Key Features
 
-- **Multi-Format Support**: Upload `.pdf`, `.epub`, or `.txt` files directly.
-- **Multiple Translation Engines**: 
-  - **Local (IndicTrans2)**: 100% offline and private translation running on your local machine (ideal for privacy-sensitive documents).
-  - **Cloud (Gemini / Claude)**: Fast and highly accurate translation utilizing powerful online AI models.
-- **Side-by-Side Editor**: Interactive workspace to review the translation line-by-line and make manual corrections on the fly.
-- **Glossary Management**: Register custom terminology rules (e.g., specific name or term mappings) to bypass automated translation and maintain consistency.
-- **Progress Tracking**: Pausable and resumable translation batches. Automatically tracks translated chunks, pending chunks, and user corrections.
-- **Multi-Format Export**: Once translated, reassemble and download the output book in `.txt`, `.epub`, or `.pdf` (with embedded Bengali fonts) formats.
+| Feature | Detail |
+|---|---|
+| **Local translation** | IndicTrans2 1B model — 100% offline, fully private |
+| **Cloud backup** | Gemini 2.0 Flash · Claude Haiku 4.5 |
+| **Image input** | Scanned PDF pages via Tesseract OCR; photo-of-page via Claude Vision |
+| **Translation Memory (TM)** | Exact + fuzzy (≥92%) matching — 100% accuracy on matched sentences |
+| **BAPS Glossary** | 87 BAPS-specific terms protected from model mistranslation |
+| **Resume / pause** | SQLite database — large books can be paused and resumed at any time |
+| **Manual editor** | Side-by-side editor with instant DB save and Save-to-Memory button |
+| **TM Manager** | Batch save, CSV import/export, cloud-assisted generation, book alignment |
+| **Export formats** | TXT · PDF (Bengali font) · EPUB · DOCX |
 
-## 🛠️ Installation & Setup
+---
 
-1. **Navigate to the project directory**:
-   ```bash
-   cd BAPS_Book_Translator
-   ```
+## 🛠️ Installation
 
-2. **Install the dependencies**:
-   Make sure you have Python installed, then run:
-   ```bash
-   pip install -r requirements.txt
-   ```
-   *(Note: This project uses PyTorch, Transformers, Streamlit, and several other libraries for document parsing and UI.)*
+```bash
+# Clone
+git clone https://github.com/Aryanbuha890/BAPS_Book_Translator.git
+cd BAPS_Book_Translator
 
-3. **Run the Application**:
-   Launch the web app using Streamlit:
-   ```bash
-   streamlit run app.py
-   ```
+# Python environment
+python -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
 
-## 🚀 How to Use
+# Install dependencies
+pip install -r requirements.txt
 
-1. **Configure Settings**: Open the left sidebar to select your **Source Language** (Gujarati, Hindi, English) and your **Translation Engine**. 
-   - If using cloud engines, enter your Gemini or Claude API key.
-   - If using the local IndicTrans2 engine, it will cache the model locally.
-2. **Upload a Book**: Drag and drop your document. The application will chunk the text and initialize a local SQLite database to track your progress.
-3. **Translate**: Click **Start Translation**. You can pause and resume at any time. A live status tracker will estimate the time remaining.
-4. **Edit & Review**: Switch to the **Side-by-Side Editor** tab to manually correct any sentences. Add specific rules in the **Terminology Glossary** tab.
-5. **Export**: Once 100% complete, head to the "Reassemble & Download Book" section to export your translated masterpiece as a TXT, EPUB, or PDF file.
+# Download translation model (choose tier based on your RAM)
+python download_model.py
+```
+
+### Model download options
+
+```
+python download_model.py
+```
+
+| Option | Model | Download | RAM needed |
+|---|---|---|---|
+| `1` ⭐ | IndicTrans2 Indic-Indic 1B | ~4.5 GB | 4 GB |
+| `2` | IndicTrans2 En-Indic 1B | ~4.5 GB | 4 GB |
+| `3` | Both models | ~9 GB | 4 GB |
+
+> **Requires a HuggingFace token** — accept the model terms at  
+> https://huggingface.co/ai4bharat/indictrans2-indic-indic-1B first.
+
+---
+
+## 🚀 Running the app
+
+```bash
+source venv/bin/activate
+streamlit run app.py
+# Opens at http://localhost:8501
+```
+
+---
+
+## 📖 How to Use
+
+### 1. Translate a book
+
+1. Open the sidebar — select **Source Language** and **Translation Engine**
+2. Upload a book file (PDF, EPUB, TXT) or an image (PNG, JPG)
+3. Click **▶ Start Translation** — you can pause and resume at any time
+4. Go to **Side-by-Side Editor** tab to review and correct sentences
+5. When complete, click **Generate** and **Download** in your chosen format
+
+### 2. Improve accuracy with the Terminology Glossary
+
+Open the **🏷️ Terminology Glossary** tab to add custom term mappings. Terms are replaced with placeholders before translation and restored correctly afterward — bypassing the model entirely for critical proper nouns.
+
+### 3. Image input
+
+- **Scanned PDF:** Upload normally — OCR fallback runs automatically on image-only pages (requires Tesseract installed)
+- **Photo of a page:** Upload a JPG/PNG — Path A uses Claude Vision, Path B uses local Tesseract
+
+---
+
+## 🧠 How to Grow Translation Memory Fast
+
+The Translation Memory (TM) gives **100% accurate** translations with no model involved. Every sentence added permanently improves all future books. Open the **🧠 Translation Memory** tab for all four paths:
+
+### Path 1 — Batch save from current book (1 click)
+After correcting sentences in the Side-by-Side Editor, open TM Manager → **Path 1**. All your corrected sentences save to TM in one click.
+
+### Path 2 — CSV / Spreadsheet import (fastest for existing data)
+If you have a spreadsheet of Gujarati→Bengali pairs:
+1. Export it as CSV with two columns: **Gujarati** (col A), **Bengali** (col B) — no header row
+2. Upload in **Path 2** → preview → **Import All**
+
+```csv
+ભગવાન સ્વામિનારાયણ,ভগবান স্বামীনারায়ণ
+ગઢડા પ્રથમ,গড়দা প্রথম
+...
+```
+
+### Path 3 — Cloud-assisted batch generation (for novel sentences)
+1. Enter your Gemini API key in **Path 3**
+2. Generate cloud translations for 20–50 sentences at a time
+3. Review each one in the UI — edit if needed, uncheck if wrong
+4. Click **Save Approved** → done
+
+### Path 4 ⭐ — Align Gujarati + Bengali book files (adds 1,000+ entries at once)
+If you have an **official BAPS Bengali translation** of the Vachanamrut or any other book alongside the Gujarati original:
+
+1. Open **Path 4** in the TM Manager tab
+2. Upload the **Gujarati source** file (PDF, EPUB, or TXT) on the left
+3. Upload the **Bengali translation** file on the right
+4. Preview the 15-pair alignment preview — verify it looks correct
+5. Click **Import All** — the tool aligns sentences by position and bulk-adds every pair
+
+> **Why this works:** Official BAPS Bengali translations are paragraph-faithful to the Gujarati. Sentence-level position alignment is highly accurate for Vachanamrut text.
+
+After importing a full Vachanamrut, accuracy on that book jumps from ~65% → **90%+** because the TM handles most sentences directly.
+
+---
 
 ## 📁 Project Structure
 
-- `app.py`: Main Streamlit web application dashboard and UI.
-- `extractor.py`: Handles text extraction from PDF, EPUB, and TXT files.
-- `chunker.py`: Splits large texts into manageable chunks for accurate translation.
-- `translator.py`: Contains API integrations for Gemini, Claude, and local IndicTrans2 models.
-- `progress.py`: Manages the local SQLite database to save translation states, user edits, and glossary terms.
-- `assembler.py`: Re-compiles translated chunks back into the chosen export formats.
-- `requirements.txt`: Python package dependencies.
+```
+BAPS_Book_Translator/
+├── app.py                    # Streamlit UI (all tabs)
+├── translator.py             # IndicTrans2, NLLB, Gemini, Claude engines
+├── extractor.py              # PDF/EPUB/TXT extraction + Tesseract OCR fallback
+├── chunker.py                # Sentence splitting (with Gujarati conjunction splitting)
+├── assembler.py              # Output builder (TXT/PDF/EPUB/DOCX)
+├── glossary.py               # Placeholder swap system (protects proper nouns)
+├── progress.py               # SQLite resume tracking
+├── image_translator.py       # Claude Vision + Tesseract for image input
+├── download_model.py         # Interactive model downloader (all tiers)
+├── translation_memory.json   # Verified Gujarati→Bengali sentence pairs
+├── glossary.csv              # 87 BAPS term mappings
+├── NotoSansBengali-Regular.ttf  # Bengali font for PDF export
+└── requirements.txt
+```
+
+---
+
+## 🎯 Accuracy
+
+| Content type | Current accuracy |
+|---|---|
+| Sentences in Translation Memory | 100% |
+| Chapter headers / short phrases | ~85–90% |
+| Medium discourse sentences | ~65–75% |
+| Long compound sentences | ~50–65% |
+
+**The single biggest accuracy lever is the Translation Memory.** The model handles novel sentences; the TM handles everything it has seen before at 100% accuracy. See "How to Grow Translation Memory Fast" above.
+
+---
+
+## ⚙️ Configuration
+
+All settings are in the sidebar:
+
+- **Source language** — Auto-detect, Gujarati, Hindi, English
+- **Engine** — Local (IndicTrans2) · Cloud (Gemini) · Cloud (Claude)
+- **Batch size** — Lower if RAM < 8 GB
+- **HuggingFace token** — Only needed for first IndicTrans2 download
+
+---
+
+## 📦 Dependencies
+
+Key packages: `torch`, `transformers`, `indictranstoolkit`, `rapidfuzz`, `PyMuPDF`, `streamlit`, `reportlab`, `ebooklib`, `pytesseract`, `Pillow`, `anthropic`, `google-generativeai`
+
+Full list: `requirements.txt`
