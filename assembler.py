@@ -157,8 +157,9 @@ def assemble_epub(chapters_data: list[tuple[str, list[str]]], output_path: str) 
             "The 'ebooklib' package is required to generate EPUB files. "
             "Please run 'venv\\Scripts\\pip install ebooklib' in your environment to install it."
         )
+    import uuid
     book = epub.EpubBook()
-    book.set_identifier('baps_translator_epub_id_1')
+    book.set_identifier(str(uuid.uuid4()))
     book.set_title('Translated Bengali Book')
     book.set_language('bn')
     book.add_author('BAPS Book Translator')

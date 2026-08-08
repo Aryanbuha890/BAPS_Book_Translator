@@ -7,15 +7,11 @@ GLOSSARY_CSV_PATH = "glossary.csv"
 
 def load_glossary(db_helper=None) -> dict[str, str]:
     """
-    Loads glossary mappings. Combines mappings stored in:
-    1. The active SQLite database (via db_helper).
-    2. A local 'glossary.csv' file if present in the project directory.
-    
+    Loads glossary mappings from glossary.csv (startup) and the SQLite DB (per-book overrides).
     Returns a unified dict: {original_term: translated_term}
     """
     glossary = {}
-    
-    # 1. Load from local CSV file if exists
+
     if os.path.exists(GLOSSARY_CSV_PATH):
         try:
             with open(GLOSSARY_CSV_PATH, mode='r', encoding='utf-8') as f:
@@ -27,83 +23,92 @@ def load_glossary(db_helper=None) -> dict[str, str]:
                             glossary[src] = tgt
         except Exception as e:
             print(f"Warning: Failed to read {GLOSSARY_CSV_PATH}: {e}")
-            
-    # 2. Load from SQLite Database (overwrites CSV values if conflicts exist)
+
     if db_helper:
         try:
             db_glossary = db_helper.get_glossary()
             glossary.update(db_glossary)
         except Exception as e:
             print(f"Warning: Failed to load glossary from database: {e}")
-            
+
     return glossary
 
 def swap_in(text: str, glossary: dict[str, str]) -> tuple[str, dict[int, str]]:
     """
-    Scans the text for glossary terms, replaces them with unique 5-digit numbers
-    in the range 80000-89999, and stores the mapped target terms.
-    
-    Returns a tuple: (swapped_text, placeholder_map)
-    placeholder_map maps the 5-digit number to the target translated term.
+    Replaces glossary terms in text with unique 5-digit placeholders (80001–89999).
+    One placeholder per glossary term (not per match variant) to avoid collisions.
+    Uses re.sub for substitution so word-boundary logic works uniformly.
+
+    Returns: (swapped_text, placeholder_map)
+    placeholder_map: {placeholder_number: target_bengali_term}
     """
     if not glossary:
         return text, {}
-        
+
     placeholder_map = {}
     counter = 80000
     swapped_text = text
-    
-    # Sort terms by length in descending order to match longer phrases before shorter sub-phrases
+
+    # Process longer terms first to avoid shorter sub-phrases stealing the match
     sorted_terms = sorted(glossary.keys(), key=len, reverse=True)
-    
-    for term in sorted_terms:
-        # Match word boundaries or exact characters
-        pattern = re.compile(re.escape(term), re.IGNORECASE)
-        matches = pattern.findall(swapped_text)
-        if matches:
-            for match in set(matches):
-                counter += 1
-                placeholder_map[counter] = glossary[term]
-                # Replace exact matches with placeholder number
-                swapped_text = swapped_text.replace(match, f" {counter} ")
-                
-    # Normalize double spaces that may be introduced by padding spaces around placeholders
+
+    # Only protect multi-word proper nouns or long single terms.
+    # Single short words (< 5 chars) like 'હરિ', 'સેવા', 'સભા' are common enough
+    # that the model handles them correctly. Replacing them removes context the model
+    # needs to understand sentence structure.
+    MIN_TERM_LENGTH = 5
+
+    # Count how many terms would be replaced
+    hit_terms = [t for t in sorted_terms if t in text and len(t) >= MIN_TERM_LENGTH]
+
+    # Cap at 4 replacements per chunk to prevent placeholder flooding
+    MAX_REPLACEMENTS = 4
+    active_terms = hit_terms[:MAX_REPLACEMENTS]
+
+    for term in active_terms:
+        if term not in swapped_text:
+            continue
+        counter += 1
+        placeholder_map[counter] = glossary[term]
+        swapped_text = swapped_text.replace(term, f" {counter} ")
+
     swapped_text = re.sub(r'\s{2,}', ' ', swapped_text).strip()
     return swapped_text, placeholder_map
 
 def swap_out(text: str, placeholder_map: dict[int, str]) -> str:
     """
-    Scans translated text for 5-digit placeholders (converting any Bengali/Devanagari
-    digits back to English) and restores target glossary terms.
+    Restores 5-digit placeholders back to Bengali target terms.
+    Handles Bengali/Devanagari/Gujarati digit variants that the model may output.
     """
     if not placeholder_map:
         return text
-        
+
     normalized_text = text
-    # Convert Bengali digits to English digits
+
+    # Convert Bengali digits → ASCII
     mapping_ben = str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789")
     normalized_text = normalized_text.translate(mapping_ben)
-    # Convert Devanagari / Gujarati digits to English
-    mapping_ind = str.maketrans("०१२३४५६७८९૧૨૩૪૫૬૭૮૯", "0123456789123456789")
+
+    # Convert Devanagari digits + Gujarati digits (including ૦ zero) → ASCII
+    mapping_ind = str.maketrans("०१२३४५६७८९૦૧૨૩૪૫૬૭૮૯", "01234567890123456789")
     normalized_text = normalized_text.translate(mapping_ind)
-    
-    # Remove commas and spaces that the model often inserts into 5-digit placeholders (e.g. '8, 0004' -> '80004')
-    normalized_text = re.sub(r'8\s*,?\s*(\d{4})', r'8\1', normalized_text)
-    
-    restored_text = normalized_text
-    
-    # First, match using regex with word boundaries to avoid corruption
+
+    # Restore placeholders the model may have split with commas/spaces.
+    # Handles: 80,001 | 8,0001 | 8 0001 | 80 001 — all variants of 5-digit 8XXXX numbers
+    normalized_text = re.sub(r'\b(8[0-9])[,\s]+([0-9]{3})\b', r'\1\2', normalized_text)  # 80,001
+    normalized_text = re.sub(r'\b8[,\s]+([0-9]{4})\b', r'8\1', normalized_text)            # 8,0001
+
+    # First pass: regex word-boundary replacement
     pattern = re.compile(r'\b(8\d{4})\b')
     def replace_match(match):
         num = int(match.group(1))
         return placeholder_map.get(num, match.group(0))
-        
-    restored_text = pattern.sub(replace_match, restored_text)
-    
-    # Second, do a direct substring replace for any remaining placeholders (e.g. joined with suffixes)
+
+    restored_text = pattern.sub(replace_match, normalized_text)
+
+    # Second pass: direct substring replace for any placeholders joined with suffixes
     for placeholder, target_term in sorted(placeholder_map.items(), reverse=True):
         restored_text = restored_text.replace(str(placeholder), target_term)
-        
-    # Clean up double spaces introduced by spacer padding
+
     restored_text = re.sub(r'\s{2,}', ' ', restored_text)
     return restored_text.strip()
